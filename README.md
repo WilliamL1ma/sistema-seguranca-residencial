@@ -11,6 +11,7 @@ Simulação de um alarme residencial em C, com detecção de movimento pela webc
 - **Bloqueio** por 30 segundos depois de 3 senhas erradas.
 - **Contador de disparos** do alarme.
 - **Sem câmera:** o movimento pode ser simulado pelo teclado.
+- **Alarme sonoro:** usa a função `Beep` da API do Windows, sem MP3 ou bibliotecas externas. O som toca em uma thread separada e continua até a senha correta ser digitada.
 
 ## Requisitos
 
@@ -44,3 +45,10 @@ Os valores ficam em `#define`, no topo de `main.c`:
 - `LIMIAR_PIXEL`: quanto o brilho de um pixel precisa mudar (de 0 a 255).
 - `PERCENTUAL_MOVIMENTO`: percentual mínimo de pixels que precisam mudar.
 - `QUADROS_CONFIRMACAO`: quantas imagens seguidas com movimento confirmam a detecção.
+
+## Ajuste do som do alarme
+
+No topo de `main.c`, os valores abaixo podem ser alterados:
+
+- `FREQUENCIA_ALARME`: frequência em Hertz. Valores mais altos produzem sons mais agudos.
+- `DURACAO_BIP_ALARME`: duração de cada bip em milissegundos.

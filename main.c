@@ -21,6 +21,8 @@
 #define SENHA_CORRETA 1234   //Define uma constante: para trocar a senha, basta alterar este valor
 #define TEMPO_ENTRADA 10     //Define uma constante: segundos que o morador tem para digitar a senha depois de abrir a porta
 #define TEMPO_BLOQUEIO 30    //Define uma constante: segundos de bloqueio depois de 3 senhas erradas
+#define FREQUENCIA_ALARME 1000 //Frequência do bip em Hertz
+#define DURACAO_BIP_ALARME 500 //Duração de cada bip em milissegundos
 
 //----------------------------- CONFIGURAÇÃO DA CÂMERA -----------------------------
 #define LARGURA_CAMERA 160         //Largura da imagem capturada (imagem pequena = comparação mais rápida)
@@ -224,6 +226,66 @@ void esperar(int segundos)
     while (difftime(time(NULL), inicio) < segundos);  //Repete enquanto o tempo passado desde o início for menor que o desejado
 }
 
+//----------------------------- SOM DO ALARME -----------------------------
+//O som toca em uma "thread": uma segunda linha de execução que roda ao mesmo tempo que o main.
+//Assim o alarme continua apitando enquanto o programa espera o usuário digitar no scanf.
+//Não usa arquivo MP3 nem biblioteca externa: Beep e CreateThread fazem parte da Windows API.
+
+volatile int alarmeAtivo = 0;   //0 = desligado / 1 = ligado. É global para a thread do som também enxergar.
+                                //"volatile" avisa o compilador que outra thread pode mudar o valor a qualquer momento
+HANDLE threadSom = NULL;        //Identificador da thread do som (NULL = nenhuma thread criada)
+
+//Função executada pela thread do som: repete o bip enquanto o alarme estiver ativo.
+DWORD WINAPI tocarAlarme(LPVOID parametro)
+{
+    (void)parametro;                                  //Parâmetro exigido pelo Windows, mas não usado aqui
+    while (alarmeAtivo == 1) {                        //Enquanto o alarme estiver ligado:
+        Beep(FREQUENCIA_ALARME, DURACAO_BIP_ALARME);  //Emite um bip agudo
+        Sleep(DURACAO_BIP_ALARME);                    //Intervalo silencioso antes do próximo bip
+    }
+    return 0;                                         //Alarme desligado: a thread termina
+}
+
+//Função que liga o alarme e começa a tocar o som sem travar o programa.
+void dispararAlarme()
+{
+    if (threadSom != NULL) {                          //Se sobrou uma thread de um disparo anterior:
+        WaitForSingleObject(threadSom, INFINITE);     //Espera ela terminar (no máximo o último bip)
+        CloseHandle(threadSom);                       //Libera o identificador
+        threadSom = NULL;
+    }
+
+    alarmeAtivo = 1;                                  //Registra que o alarme foi acionado
+    threadSom = CreateThread(NULL, 0, tocarAlarme, NULL, 0, NULL);   //Cria a thread que toca o som
+    if (threadSom == NULL) {                          //Não conseguiu criar a thread:
+        printf("Aviso: nao foi possivel tocar o som do alarme.\n");
+    }
+}
+
+//Função que desliga o alarme. A thread do som percebe a mudança e para sozinha.
+void desligarAlarme()
+{
+    alarmeAtivo = 0;                                  //A thread sai do while depois do bip atual
+}
+
+//Função que simula o envio de um alerta para o celular do proprietário.
+//Recebe o motivo do disparo (ex.: "Movimento detectado pela câmera") e mostra a mensagem com o horário.
+void notificarProprietario(const char *motivo)
+{
+    time_t agora = time(NULL);                   //Horário atual
+    struct tm *hora = localtime(&agora);         //Separa o horário em hora, minuto e segundo
+
+    printf("\nEnviando alerta para o celular do proprietário...\n");
+    esperar(1);                                  //Pequena pausa para simular o envio
+    printf("+------------------------------------------------+\n");
+    printf("| SMS ENVIADO AO PROPRIETÁRIO                    |\n");
+    printf("+------------------------------------------------+\n");
+    printf("  Alerta de segurança às %02d:%02d:%02d\n", hora->tm_hour, hora->tm_min, hora->tm_sec);
+    printf("  Motivo: %s\n", motivo);
+    printf("  Verifique sua residência ou ligue 190.\n");
+    printf("+------------------------------------------------+\n");
+}
+
 //Função da contagem regressiva de saída (usada ao armar o sistema no modo Ausente).
 //Durante a contagem a câmera não é verificada, para o próprio morador não disparar o alarme ao sair.
 void contagemSaida()
@@ -350,7 +412,6 @@ int main()                    //Início do programa;
     int tentativas = 0;       //Criação de variável (Quantas vezes a senha foi digitada e estava incorreta - inicia 0)
     time_t bloqueadoAte = 0;  //Criação de variável (Horário em que o bloqueio termina - inicia 0 = sem bloqueio)
     int armado = 0;           //Criação de variável (0 = sistema desarmado / 1 = sistema armado e monitorando)
-    int alarmeAtivo = 0;      //Criação de variável (0 = desligado / 1 = ligado)
     int disparos = 0;         //Criação de variável (Quantas vezes o alarme foi acionado - inicia 0)
     int desejaSenha;          //Criação de variável (Armazena a escolha do usuário: digitar a senha ou não)
     int rearmar;              //Criação de variável (Armazena a escolha do usuário: armar o sistema novamente ou não)
@@ -395,7 +456,7 @@ int main()                    //Início do programa;
             }
 
         } else if (alarmeAtivo == 1) {                //Sistema armado e alarme tocando: permite tentar a senha
-            printf("\nALARME CONTINUA ATIVO!\n");     //Mantém o alarme ativo e indica mensagem de aviso.
+            printf("\nALARME CONTINUA ATIVO!\n");     //Mantém o alarme ativo e indica mensagem de aviso (o som segue tocando na thread).
 
             if (time(NULL) < bloqueadoAte) {          //Se o sistema ainda está bloqueado:
                 printf("\nSistema bloqueado! Aguarde %d segundos para tentar a senha.\n", (int)(bloqueadoAte - time(NULL)));   //Informa quanto falta
@@ -405,7 +466,7 @@ int main()                    //Início do programa;
                 desejaSenha = lerInteiro("\nDigitar senha para desativar o alarme? (1-Sim/0-Nao): ", 0, 1);   //Pergunta se quer digitar a senha agora
 
                 if (desejaSenha == 1 && pedirSenha(&tentativas, &bloqueadoAte, 0) == 1) {   //Quis digitar e a senha está correta (sem tempo limite):
-                    alarmeAtivo = 0;                  //Altera o estado do alarme para 0 (desligado).
+                    desligarAlarme();                 //Altera o estado do alarme para 0 (desligado) e para o som.
                     armado = 0;                       //Desarma o sistema junto com o alarme
                     printf("\nALARME DESATIVADO COM SUCESSO!\n");   //Informa que o alarme foi desativado.
                 } else {
@@ -421,10 +482,11 @@ int main()                    //Início do programa;
 
             } else if (evento == EVENTO_MOVIMENTO) {  //Câmera confirmou movimento no modo Ausente:
                 disparos++;                           //Incrementa o contador de disparos em 1
-                alarmeAtivo = 1;                      //Registra que o alarme foi acionado.
+                dispararAlarme();                     //Registra que o alarme foi acionado e começa o som.
 
                 printf("\nALERTA! POSSÍVEL INVASÃO!\n");          //Texto de alerta caso alarme ativado.
                 printf("ALERTA ACIONADO!\n");                     //Texto de alerta caso alarme ativado.
+                notificarProprietario("Movimento detectado pela câmera");   //Avisa o dono da casa pelo celular
 
             } else {                                  //Porta aberta com o alarme desligado: começa o tempo de entrada
                 printf("\nPORTA ABERTA! Digite a senha em ate %d segundos.\n", TEMPO_ENTRADA);   //Avisa o tempo que o morador tem
@@ -434,10 +496,11 @@ int main()                    //Início do programa;
                     printf("\nSISTEMA DESARMADO!\n"); //Informa que o sistema foi desarmado
                 } else {                              //Errou, estourou o tempo ou está bloqueado: dispara o alarme
                     disparos++;                       //Incrementa o contador de disparos em 1
-                    alarmeAtivo = 1;                  //Registra que o alarme foi acionado.
+                    dispararAlarme();                 //Registra que o alarme foi acionado e começa o som.
 
                     printf("\nALERTA! POSSÍVEL INVASÃO!\n");      //Texto de alerta caso alarme ativado.
                     printf("ALERTA ACIONADO!\n");                 //Texto de alerta caso alarme ativado.
+                    notificarProprietario("Porta aberta sem a senha correta");   //Avisa o dono da casa pelo celular
                 }
             }
         }
